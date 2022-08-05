@@ -17,14 +17,13 @@ package ghidra.app.plugin.core.string.variadic;
 
 import java.util.*;
 
-import ghidra.docking.settings.SettingsImpl;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.data.StringDataInstance;
-import ghidra.program.model.data.StringDataType;
+import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBufferImpl;
 import ghidra.program.model.pcode.PcodeOpAST;
 import ghidra.program.model.pcode.Varnode;
+import ghidra.program.model.symbol.SourceType;
 
 /**
  * Class for parsing functions' Pcode representations and finding variadic
@@ -33,13 +32,11 @@ import ghidra.program.model.pcode.Varnode;
  */
 public class PcodeFunctionParser {
 
-	// All values within the range [32, 126] are ascii readable
-	private static final int READABLE_ASCII_LOWER_BOUND = 32;
-	private static final int READABLE_ASCII_UPPER_BOUND = 126;
 	// How many bytes to read from a memory address when initial format
-	// String cannot be found. This normally only happens for short format
-	// Strings with lengths less than 5
-	private static final int BUFFER_LENGTH = 20;
+	// String cannot be found. This can happen when the format string
+	// is too short or contains escape characters that thwart the
+	// ASCII string analyzer
+	private static final int NULL_TERMINATOR_PROBE = -1;
 	private static final String CALL_INSTRUCTION = "CALL";
 
 	private Program program;
@@ -84,7 +81,7 @@ public class PcodeFunctionParser {
 						boolean hasDefinedFormatString = searchForVariadicCallData(ast,
 							addressToCandidateData, functionCallDataList, functionName);
 						if (!hasDefinedFormatString) {
-							searchForHiddenFormatStrings(ast, functionCallDataList, functionName);
+							searchForHiddenFormatStrings(ast, functionCallDataList, function);
 						}
 					}
 				}
@@ -109,6 +106,25 @@ public class PcodeFunctionParser {
 					functionName, data.getDefaultValueRepresentation()));
 				hasDefinedFormatString = true;
 			}
+			else {
+				//check for offcut references into a larger defined string
+				Data containing = program.getListing().getDataContaining(ramSpaceAddress);
+				if (containing == null) {
+					continue;
+				}
+				if (addressToCandidateData.containsKey(containing.getAddress())) {
+					StringDataInstance entire =
+						StringDataInstance.getStringDataInstance(containing);
+					String subString = entire.getByteOffcut(
+						(int) (ramSpaceAddress.getOffset() - containing.getAddress().getOffset()))
+							.getStringValue();
+					if (subString != null) {
+						functionCallDataList.add(new FunctionCallData(ast.getSeqnum().getTarget(),
+							functionName, subString));
+						hasDefinedFormatString = true;
+					}
+				}
+			}
 		}
 		return hasDefinedFormatString;
 	}
@@ -116,20 +132,28 @@ public class PcodeFunctionParser {
 	// If addrToCandidateData doesn't have format String data for this call
 	// and we are calling a variadic function, parse the String to determine
 	// whether it's a format String. 
-	private void searchForHiddenFormatStrings(PcodeOpAST ast,
-			List<FunctionCallData> functionCallDataList, String functionName) {
+	private void searchForHiddenFormatStrings(PcodeOpAST callOp,
+			List<FunctionCallData> functionCallDataList, Function function) {
 
-		Varnode[] inputs = ast.getInputs();
-		// Initialize i = 1 to skip first input
+		Varnode[] inputs = callOp.getInputs();
+		// Initialize i = 1 to skip first input, which is the call target
 		for (int i = 1; i < inputs.length; ++i) {
 			Varnode v = inputs[i];
-			String formatStringCandidate = findFormatString(v.getAddress());
+			Parameter param = function.getParameter(i - 1);
+			if (param == null || param.getSource().equals(SourceType.DEFAULT)) {
+				continue;
+			}
+			DataType type = param.getDataType();
+			if ((type == null) || !(type instanceof Pointer)) {
+				continue;
+			}
+			String formatStringCandidate = findNullTerminatedString(v.getAddress(), (Pointer) type);
 			if (formatStringCandidate == null) {
 				continue;
 			}
 			if (formatStringCandidate.contains("%")) {
-				functionCallDataList.add(new FunctionCallData(ast.getSeqnum().getTarget(),
-					functionName, formatStringCandidate));
+				functionCallDataList.add(new FunctionCallData(callOp.getSeqnum().getTarget(),
+					function.getName(), formatStringCandidate));
 			}
 			break;
 		}
@@ -145,9 +169,10 @@ public class PcodeFunctionParser {
 	 * Looks at bytes at given address and converts to format String
 	 * 
 	 * @param address Address of format String
+	 * @param pointer Pointer "type" of string
 	 * @return format String
 	 */
-	private String findFormatString(Address address) {
+	String findNullTerminatedString(Address address, Pointer pointer) {
 
 		if (!address.getAddressSpace().isConstantSpace()) {
 			return null;
@@ -158,27 +183,19 @@ public class PcodeFunctionParser {
 
 		MemoryBufferImpl memoryBuffer =
 			new MemoryBufferImpl(this.program.getMemory(), ramSpaceAddress);
-		SettingsImpl settings = new SettingsImpl();
 
-		StringDataInstance stringDataInstance = StringDataInstance
-				.getStringDataInstance(new StringDataType(), memoryBuffer, settings, BUFFER_LENGTH);
-		String stringValue = stringDataInstance.getStringValue();
-		if (stringValue == null) {
+		DataType charType = pointer.getDataType();
+		//StringDataInstace.getStringDataInstance checks that charType is appropriate
+		//and returns StringDataInstace.NULL_INSTANCE if not
+		StringDataInstance stringDataInstance = StringDataInstance.getStringDataInstance(charType,
+			memoryBuffer, charType.getDefaultSettings(), NULL_TERMINATOR_PROBE);
+		int detectedLength = stringDataInstance.getStringLength();
+		if (detectedLength == -1) {
 			return null;
 		}
-
-		String formatStringCandidate = "";
-		for (int i = 0; i < stringValue.length(); i++) {
-			if (!isAsciiReadable(stringValue.charAt(i))) {
-				break;
-			}
-			formatStringCandidate += stringValue.charAt(i);
-		}
-		return formatStringCandidate;
+		stringDataInstance = new StringDataInstance(charType, charType.getDefaultSettings(),
+			memoryBuffer, detectedLength, true);
+		return stringDataInstance.getStringValue();
 	}
 
-	private boolean isAsciiReadable(char c) {
-
-		return c >= READABLE_ASCII_LOWER_BOUND && c <= READABLE_ASCII_UPPER_BOUND;
-	}
 }

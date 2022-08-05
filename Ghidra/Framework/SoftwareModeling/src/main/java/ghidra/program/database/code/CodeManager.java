@@ -21,7 +21,8 @@ import java.util.*;
 import db.*;
 import db.util.ErrorHandler;
 import ghidra.program.database.*;
-import ghidra.program.database.data.DataTypeManagerDB;
+import ghidra.program.database.data.PointerTypedefInspector;
+import ghidra.program.database.data.ProgramDataTypeManager;
 import ghidra.program.database.map.*;
 import ghidra.program.database.properties.*;
 import ghidra.program.database.symbol.SymbolManager;
@@ -55,7 +56,7 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 	private ProgramDB program;
 	private PrototypeManager protoMgr;
 	private DBObjectCache<CodeUnitDB> cache;
-	private DataTypeManagerDB dataManager;
+	private ProgramDataTypeManager dataManager;
 	private EquateTable equateTable;
 	private SymbolManager symbolTable;
 	private ProgramContext contextMgr;
@@ -623,26 +624,9 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 
 		Register contextReg = contextMgr.getBaseContextRegister();
 		if (contextReg != Register.NO_CONTEXT) {
-			try {
-				RegisterValue contextValue = context.getRegisterValue(contextReg);
-				Address start = address;
-				if (SystemUtilities.isEqual(contextValue,
-					contextMgr.getDefaultValue(contextReg, start))) {
-					contextMgr.setValue(contextReg, start, endAddr, null);
-				}
-				else {
-					// Do not save non-flowing context beyond
-					RegisterValue ctx = contextValue;
-					if (contextMgr.hasNonFlowingContext() && !start.equals(endAddr)) {
-						contextMgr.setRegisterValue(start, start, ctx);
-						ctx = contextMgr.getFlowValue(ctx);
-						start = start.next();
-					}
-					contextMgr.setRegisterValue(start, endAddr, ctx);
-				}
-			}
-			catch (ContextChangeException e) {
-				throw new AssertException(e.getMessage()); // Unexpected
+			RegisterValue contextValue = context.getRegisterValue(contextReg);
+			if (contextValue != null && contextValue.hasAnyValue()) {
+				saveInstructionContext(address, endAddr, contextValue);
 			}
 		}
 
@@ -662,6 +646,31 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 
 		addReferencesForInstruction(inst);
 		return inst;
+	}
+
+	private void saveInstructionContext(Address address, Address endAddr,
+			RegisterValue contextValue) {
+		try {
+			Address start = address;
+			Register contextReg = contextValue.getRegister();
+			if (SystemUtilities.isEqual(contextValue,
+				contextMgr.getDefaultValue(contextReg, start))) {
+				contextMgr.setValue(contextReg, start, endAddr, null);
+			}
+			else {
+				// Do not save non-flowing context beyond
+				RegisterValue ctx = contextValue;
+				if (contextMgr.hasNonFlowingContext() && !start.equals(endAddr)) {
+					contextMgr.setRegisterValue(start, start, ctx);
+					ctx = contextMgr.getFlowValue(ctx);
+					start = start.next();
+				}
+				contextMgr.setRegisterValue(start, endAddr, ctx);
+			}
+		}
+		catch (ContextChangeException e) {
+			throw new AssertException(e.getMessage()); // Unexpected
+		}
 	}
 
 	RegisterValue getOriginalPrototypeContext(InstructionPrototype prototype,
@@ -2044,7 +2053,7 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 		if (block == null || !block.isInitialized()) {
 			return;
 		}
-		DataType dt = data.getBaseDataType();
+		DataType dt = data.getDataType();
 		if (Address.class.equals(dt.getValueClass(null))) {
 			Object obj = data.getValue();
 			if (obj instanceof Address) {
@@ -2100,7 +2109,7 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 			return; // treat 0 and all f's as uninitialized pointer value
 		}
 
-		// for 64 bit programs, make sure we are creating pointers on random bytes which would
+		// for 64 bit programs, make sure we are not creating pointers on random bytes which would
 		// pollute our 32 bit segment map and make Ghidra run poorly.
 		if (toAddr.getAddressSpace().getSize() > 32) {
 			if (exceedsLimitOn64BitAddressSegments(longSegmentAddressList, toAddr)) {
@@ -2108,7 +2117,21 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 			}
 		}
 
-		addDataReference(data.getMinAddress(), toAddr, true);
+		DataType dataType = data.getDataType();
+		if (dataType instanceof TypeDef) {
+			// Check for pointer-typedef with component offset setting
+			long pointerComponentOffset =
+				PointerTypedefInspector.getPointerComponentOffset((TypeDef) dataType);
+			if (pointerComponentOffset != 0) {
+				refManager.addOffsetMemReference(data.getMinAddress(),
+					toAddr.subtractWrap(pointerComponentOffset), true, pointerComponentOffset,
+					RefType.DATA, SourceType.DEFAULT, 0);
+				return;
+			}
+		}
+
+		refManager.addMemoryReference(data.getMinAddress(), toAddr, RefType.DATA,
+			SourceType.DEFAULT, 0);
 	}
 
 	private boolean exceedsLimitOn64BitAddressSegments(List<Address> longSegmentAddressList,
@@ -2123,15 +2146,6 @@ public class CodeManager implements ErrorHandler, ManagerDB {
 		if (longSegmentAddressList.size() < MAX_SEGMENT_LIMIT) {
 			longSegmentAddressList.add(toAddr);
 			return false;
-		}
-		return true;
-	}
-
-	private boolean addDataReference(Address fromAddr, Address toAddr, boolean isPrimary) {
-		Reference ref =
-			refManager.addMemoryReference(fromAddr, toAddr, RefType.DATA, SourceType.DEFAULT, 0);
-		if (!isPrimary) {
-			refManager.setPrimary(ref, isPrimary);
 		}
 		return true;
 	}

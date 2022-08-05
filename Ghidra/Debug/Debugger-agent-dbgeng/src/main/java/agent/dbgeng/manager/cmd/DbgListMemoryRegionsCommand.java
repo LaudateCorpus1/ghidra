@@ -40,13 +40,16 @@ public class DbgListMemoryRegionsCommand extends AbstractDbgCommand<List<DbgModu
 	@Override
 	public List<DbgModuleMemory> complete(DbgPendingCommand<?> pending) {
 		Map<Long, DbgModuleMemory> memory = manager.getKnownMemoryRegions();
+		if (memoryRegions.isEmpty()) {
+			Msg.error(this, "Switching to !address for memory");
+			manager.setAltMemoryQuery(true);
+		}
 		for (DbgModuleMemory region : memoryRegions) {
 			if (memory.containsValue(region)) {
 				continue; // Do nothing, we're in sync
 			}
-			// Need to create the thread as if we receive =thread-created
 			if (!memory.isEmpty()) {
-				Msg.warn(this, "Resync: Was missing memory: " + region.getId());
+				Msg.warn(this, "Resync: Was missing memory: " + Long.toHexString(region.getId()));
 			}
 			manager.addMemory(region);
 		}
@@ -56,7 +59,6 @@ public class DbgListMemoryRegionsCommand extends AbstractDbgCommand<List<DbgModu
 				continue; // Do nothing, we're in sync
 			}
 			toRemove.add(entry.getKey());
-			//manager.removeMemory(entry.getKey());
 		}
 		for (Long key : toRemove) {
 			manager.removeMemory(key);

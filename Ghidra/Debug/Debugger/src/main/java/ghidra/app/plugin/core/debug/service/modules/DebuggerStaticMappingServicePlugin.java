@@ -18,6 +18,7 @@ package ghidra.app.plugin.core.debug.service.modules;
 import java.net.URL;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.ArrayUtils;
@@ -95,13 +96,12 @@ public class DebuggerStaticMappingServicePlugin extends Plugin
 		}
 
 		public Address addOrMax(Address start, long length) {
-			try {
-				return start.addNoWrap(length);
-			}
-			catch (AddressOverflowException e) {
-				Msg.warn(this, "Mapping entry cause overflow in static address space");
+			Address result = start.addWrapSpace(length);
+			if (result.compareTo(start) < 0) {
+				Msg.warn(this, "Mapping entry caused overflow in static address space");
 				return start.getAddressSpace().getMaxAddress();
 			}
+			return result;
 		}
 
 		public boolean programOpened(Program opened) {
@@ -176,7 +176,7 @@ public class DebuggerStaticMappingServicePlugin extends Plugin
 		protected Address mapTraceAddressToProgram(Address address) {
 			assert isInTraceRange(address, null);
 			long offset = address.subtract(mapping.getMinTraceAddress());
-			return staticRange.getMinAddress().add(offset);
+			return staticRange.getMinAddress().addWrapSpace(offset);
 		}
 
 		public ProgramLocation mapTraceAddressToProgramLocation(Address address) {
@@ -197,7 +197,7 @@ public class DebuggerStaticMappingServicePlugin extends Plugin
 		protected Address mapProgramAddressToTrace(Address address) {
 			assert isInProgramRange(address);
 			long offset = address.subtract(staticRange.getMinAddress());
-			return mapping.getMinTraceAddress().add(offset);
+			return mapping.getMinTraceAddress().addWrapSpace(offset);
 		}
 
 		protected TraceLocation mapProgramAddressToTraceLocation(Address address) {
@@ -598,6 +598,11 @@ public class DebuggerStaticMappingServicePlugin extends Plugin
 	}
 
 	@Override
+	public CompletableFuture<Void> changesSettled() {
+		return changeDebouncer.settled();
+	}
+
+	@Override
 	public void processEvent(PluginEvent event) {
 		if (event instanceof ProgramOpenedPluginEvent) {
 			ProgramOpenedPluginEvent openedEvt = (ProgramOpenedPluginEvent) event;
@@ -927,7 +932,7 @@ public class DebuggerStaticMappingServicePlugin extends Plugin
 		synchronized (lock) {
 			InfoPerProgram info = requireTrackedInfo(program);
 			if (info == null) {
-				return null;
+				return Map.of();
 			}
 			return info.getOpenMappedViews(set);
 		}
