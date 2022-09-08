@@ -42,8 +42,8 @@ public class ClangSyntaxToken extends ClangToken {
 		open = close = -1;
 	}
 
-	public ClangSyntaxToken(ClangNode par, String txt, String col) {
-		super(par, txt, col);
+	public ClangSyntaxToken(ClangNode par, String txt, int color) {
+		super(par, txt, color);
 		open = close = -1;
 	}
 
@@ -56,7 +56,7 @@ public class ClangSyntaxToken extends ClangToken {
 	}
 
 	@Override
-	public void decode(Decoder decoder, PcodeFactory pfactory) throws PcodeXMLException {
+	public void decode(Decoder decoder, PcodeFactory pfactory) throws DecoderException {
 		for (;;) {
 			int attribId = decoder.getNextAttributeId();
 			if (attribId == 0) {

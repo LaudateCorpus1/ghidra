@@ -973,6 +973,11 @@ bool Heritage::discoverIndexedStackPointers(AddrSpace *spc,vector<PcodeOp *> &fr
 	  }
 	  break;
 	}
+	case CPUI_SEGMENTOP:
+	{
+	  if (op->getIn(2) != curNode.vn) break;	// Check that stackpointer comes in as inner pointer
+	  // Treat output as having the same offset, fallthru to COPY
+	}
 	case CPUI_INDIRECT:
 	case CPUI_COPY:
 	{
@@ -1872,7 +1877,7 @@ void Heritage::splitJoinLevel(vector<Varnode *> &lastcombo,vector<Varnode *> &ne
       int4 sizeaccum = 0;
       int4 j;
       for(j=recnum;j<numpieces;++j) {
-	sizeaccum += joinrec->getPiece(recnum).size;
+	sizeaccum += joinrec->getPiece(j).size;
 	if (sizeaccum == curvn->getSize()) {
 	  j += 1;
 	  break;

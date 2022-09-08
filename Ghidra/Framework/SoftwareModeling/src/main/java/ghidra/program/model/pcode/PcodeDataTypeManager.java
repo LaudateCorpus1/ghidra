@@ -165,9 +165,9 @@ public class PcodeDataTypeManager {
 	 * Decode a data-type from the stream
 	 * @param decoder is the stream decoder
 	 * @return the decoded data-type object
-	 * @throws PcodeXMLException for invalid encodings 
+	 * @throws DecoderException for invalid encodings 
 	 */
-	public DataType decodeDataType(Decoder decoder) throws PcodeXMLException {
+	public DataType decodeDataType(Decoder decoder) throws DecoderException {
 		int el = decoder.openElement();
 		if (el == ELEM_VOID.id()) {
 			decoder.closeElement(el);
@@ -196,7 +196,7 @@ public class PcodeDataTypeManager {
 			return findBaseType(name, id);
 		}
 		if (el != ELEM_TYPE.id()) {
-			throw new PcodeXMLException("Expecting <type> element");
+			throw new DecoderException("Expecting <type> element");
 		}
 
 		if (name.length() != 0) {
@@ -251,6 +251,13 @@ public class PcodeDataTypeManager {
 			decoder.closeElement(el);
 			return AbstractFloatDataType.getFloatDataType(size, progDataTypes);
 		}
+		else if (meta.equals("partunion")) {
+			int size = (int) decoder.readSignedInteger(ATTRIB_SIZE);
+			int offset = (int) decoder.readSignedInteger(ATTRIB_OFFSET);
+			DataType dt = decodeDataType(decoder);
+			decoder.closeElement(el);
+			return new PartialUnion(progDataTypes, dt, offset, size);
+		}
 		else {	// We typically reach here if the decompiler invents a new type
 				// probably an unknown with a non-standard size
 			int size = (int) decoder.readSignedInteger(ATTRIB_SIZE);
@@ -258,7 +265,7 @@ public class PcodeDataTypeManager {
 			return Undefined.getUndefinedDataType(size).clone(progDataTypes);
 		}
 		if (restype == null) {
-			throw new PcodeXMLException("Unable to resolve DataType");
+			throw new DecoderException("Unable to resolve DataType");
 		}
 		decoder.closeElementSkipping(el);
 		return restype;

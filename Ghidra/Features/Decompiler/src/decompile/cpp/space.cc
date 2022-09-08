@@ -170,7 +170,7 @@ uintb AddrSpace::decodeAttributes(Decoder &decoder,uint4 &size) const
       offset = decoder.readUnsignedInteger();
     }
     else if (attribId == ATTRIB_SIZE) {
-      size = decoder.readUnsignedInteger();
+      size = decoder.readSignedInteger();
     }
   }
   if (!foundoffset)
@@ -316,7 +316,7 @@ void AddrSpace::decodeBasicAttributes(Decoder &decoder)
     if (attribId == ATTRIB_INDEX)
       index = decoder.readSignedInteger();
     else if (attribId == ATTRIB_SIZE)
-      addressSize = decoder.readUnsignedInteger();
+      addressSize = decoder.readSignedInteger();
     else if (attribId == ATTRIB_WORDSIZE)
       wordsize = decoder.readUnsignedInteger();
     else if (attribId == ATTRIB_BIGENDIAN) {
@@ -495,7 +495,7 @@ void JoinSpace::encodeAttributes(Encoder &encoder,uintb offset) const
     encoder.writeString(*attribId, t.str());
   }
   if (num == 1)
-    encoder.writeSignedInteger(ATTRIB_LOGICALSIZE, rec->getUnified().size);
+    encoder.writeUnsignedInteger(ATTRIB_LOGICALSIZE, rec->getUnified().size);
 }
 
 /// Encode a \e join address to the stream.  This method in the interface only

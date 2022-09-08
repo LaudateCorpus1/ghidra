@@ -38,15 +38,17 @@ import ghidra.program.model.pcode.*;
  * May contain links back to pcode object
  */
 public class ClangToken implements ClangNode {
-	public final static int KEYWORD_COLOR = 0;
-	public final static int TYPE_COLOR = 1;
-	public final static int FUNCTION_COLOR = 2;
-	public final static int COMMENT_COLOR = 3;
+	public final static int KEYWORD_COLOR = 0;	// Constants must match Decompiler syntax_highlight
+	public final static int COMMENT_COLOR = 1;
+	public final static int TYPE_COLOR = 2;
+	public final static int FUNCTION_COLOR = 3;
 	public final static int VARIABLE_COLOR = 4;
 	public final static int CONST_COLOR = 5;
 	public final static int PARAMETER_COLOR = 6;
 	public final static int GLOBAL_COLOR = 7;
 	public final static int DEFAULT_COLOR = 8;
+	public final static int ERROR_COLOR = 9;
+	public final static int MAX_COLOR = 10;
 
 	private ClangNode parent;
 	private ClangLine lineparent;
@@ -59,7 +61,7 @@ public class ClangToken implements ClangNode {
 		parent = par;
 		text = null;
 		highlight = null;
-		syntax_type = getColor(null);
+		syntax_type = DEFAULT_COLOR;
 		lineparent = null;
 	}
 
@@ -67,14 +69,14 @@ public class ClangToken implements ClangNode {
 		parent = par;
 		text = txt;
 		highlight = null;
-		syntax_type = getColor(null);
+		syntax_type = DEFAULT_COLOR;
 	}
 
-	public ClangToken(ClangNode par, String txt, String col) {
+	public ClangToken(ClangNode par, String txt, int color) {
 		parent = par;
 		text = txt;
 		highlight = null;
-		syntax_type = getColor(col);
+		syntax_type = color;
 	}
 
 	@Override
@@ -155,20 +157,22 @@ public class ClangToken implements ClangNode {
 		this.text = text;
 	}
 
-	public void decode(Decoder decoder, PcodeFactory pfactory) throws PcodeXMLException {
-		String col = null;
+	public void decode(Decoder decoder, PcodeFactory pfactory) throws DecoderException {
+		syntax_type = DEFAULT_COLOR;
 		for (;;) {
 			int attribId = decoder.getNextAttributeId();
 			if (attribId == 0) {
 				break;
 			}
 			if (attribId == ATTRIB_COLOR.id()) {
-				col = decoder.readString();
+				syntax_type = (int) decoder.readUnsignedInteger();
 				break;
 			}
 		}
 		text = decoder.readString(ATTRIB_CONTENT);
-		syntax_type = getColor(col);
+		if (syntax_type < 0 || syntax_type >= MAX_COLOR) {
+			syntax_type = DEFAULT_COLOR;
+		}
 	}
 
 	@Override
@@ -177,7 +181,7 @@ public class ClangToken implements ClangNode {
 	}
 
 	static public ClangToken buildToken(int node, ClangNode par, Decoder decoder,
-			PcodeFactory pfactory) throws PcodeXMLException {
+			PcodeFactory pfactory) throws DecoderException {
 		ClangToken token = null;
 		if (node == ELEM_VARIABLE.id()) {
 			token = new ClangVariableToken(par);
@@ -207,40 +211,10 @@ public class ClangToken implements ClangNode {
 			token = new ClangFieldToken(par);
 		}
 		else {
-			throw new PcodeXMLException("Expecting token element");
+			throw new DecoderException("Expecting token element");
 		}
 		token.decode(decoder, pfactory);
 		return token;
-	}
-
-	public static int getColor(String col) {
-		if (col != null) {
-			if (col.equals(ClangMarkup.KEYWORD_COLOR)) {
-				return KEYWORD_COLOR;
-			}
-			else if (col.equals(ClangMarkup.VARIABLE_COLOR)) {
-				return VARIABLE_COLOR;
-			}
-			else if (col.equals(ClangMarkup.CONST_COLOR)) {
-				return CONST_COLOR;
-			}
-			else if (col.equals(ClangMarkup.PARAMETER_COLOR)) {
-				return PARAMETER_COLOR;
-			}
-			else if (col.equals(ClangMarkup.GLOBAL_COLOR)) {
-				return GLOBAL_COLOR;
-			}
-			else if (col.equals(ClangMarkup.TYPE_COLOR)) {
-				return TYPE_COLOR;
-			}
-			else if (col.equals(ClangMarkup.COMMENT_COLOR)) {
-				return COMMENT_COLOR;
-			}
-			else if (col.equals(ClangMarkup.FUNCNAME_COLOR)) {
-				return FUNCTION_COLOR;
-			}
-		}
-		return DEFAULT_COLOR; // The default color
 	}
 
 	static public ClangToken buildSpacer(ClangNode par, int indent, String indentStr) {

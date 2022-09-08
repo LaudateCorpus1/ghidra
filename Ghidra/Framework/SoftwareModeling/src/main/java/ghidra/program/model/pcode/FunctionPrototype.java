@@ -25,7 +25,6 @@ import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.Msg;
-import ghidra.util.xml.SpecXmlUtils;
 
 /**
  * 
@@ -91,9 +90,9 @@ public class FunctionPrototype {
 	 */
 	public FunctionPrototype(FunctionSignature proto, CompilerSpec cspec,
 			boolean voidimpliesdotdotdot) {
+		modelname = proto.getGenericCallingConvention().getDeclarationName();
 		PrototypeModel model = cspec.matchConvention(proto.getGenericCallingConvention());
 		localsyms = null;
-		modelname = model.getName();
 		gconv = proto.getGenericCallingConvention();
 		injectname = null;
 		returntype = proto.getReturnType();
@@ -417,25 +416,22 @@ public class FunctionPrototype {
 	/**
 	 * Decode the function prototype from a {@code <prototype>} element in the stream.
 	 * @param decoder is the stream decoder
-	 * @param dtmanage is the DataTypeManager used to parse data-type tags
-	 * @throws PcodeXMLException for invalid encodings
+	 * @param pcodeFactory is used to resolve data-type and address space references
+	 * @throws DecoderException for invalid encodings
 	 */
-	public void decodePrototype(Decoder decoder, PcodeDataTypeManager dtmanage)
-			throws PcodeXMLException {
+	public void decodePrototype(Decoder decoder, PcodeFactory pcodeFactory)
+			throws DecoderException {
+		PcodeDataTypeManager dtmanage = pcodeFactory.getDataTypeManager();
 		int node = decoder.openElement(ELEM_PROTOTYPE);
 		modelname = decoder.readString(ATTRIB_MODEL);
 		PrototypeModel protoModel =
 			dtmanage.getProgram().getCompilerSpec().getCallingConvention(modelname);
-		if (protoModel == null) {
-			throw new PcodeXMLException("Bad prototype model name: " + modelname);
+		hasThis = (protoModel == null) ? false : protoModel.hasThisPointer();
+		try {
+			extrapop = (int) decoder.readSignedInteger(ATTRIB_EXTRAPOP);
 		}
-		hasThis = protoModel.hasThisPointer();
-		String val = decoder.readString(ATTRIB_EXTRAPOP);
-		if (val.equals("unknown")) {
+		catch (DecoderException e) {
 			extrapop = PrototypeModel.UNKNOWN_EXTRAPOP;
-		}
-		else {
-			extrapop = SpecXmlUtils.decodeInt(val);
 		}
 		modellock = false;
 		dotdotdot = false;
@@ -487,8 +483,9 @@ public class FunctionPrototype {
 			}
 		}
 
-		decoder.skipElement();
-		returnstorage = null;		// For now don't use decompiler's return storage
+		int addrel = decoder.openElement(ELEM_ADDR);
+		returnstorage = AddressXML.decodeStorageFromAttributes(-1, decoder, pcodeFactory);
+		decoder.closeElement(addrel);
 		returntype = dtmanage.decodeDataType(decoder);
 		decoder.closeElement(retel);
 

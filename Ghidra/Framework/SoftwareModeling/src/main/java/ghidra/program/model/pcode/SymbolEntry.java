@@ -43,9 +43,9 @@ public abstract class SymbolEntry {
 	/**
 	 * Decode this entry from the stream. Typically more than one element is consumed.
 	 * @param decoder is the stream decoder
-	 * @throws PcodeXMLException for invalid encodings
+	 * @throws DecoderException for invalid encodings
 	 */
-	public abstract void decode(Decoder decoder) throws PcodeXMLException;
+	public abstract void decode(Decoder decoder) throws DecoderException;
 
 	/**
 	 * Encode this entry as (a set of) elements to the given stream
@@ -85,7 +85,7 @@ public abstract class SymbolEntry {
 		return pcaddr;
 	}
 
-	protected void decodeRangeList(Decoder decoder) throws PcodeXMLException {
+	protected void decodeRangeList(Decoder decoder) throws DecoderException {
 		int rangelistel = decoder.openElement(ELEM_RANGELIST);
 		if (decoder.peekElement() != 0) {
 			// we only use this to establish first-use
@@ -93,10 +93,6 @@ public abstract class SymbolEntry {
 			AddressSpace spc = decoder.readSpace(ATTRIB_SPACE);
 			long offset = decoder.readUnsignedInteger(ATTRIB_FIRST);
 			pcaddr = spc.getAddress(offset);
-			pcaddr = symbol.function.getFunction()
-					.getEntryPoint()
-					.getAddressSpace()
-					.getOverlayAddress(pcaddr);
 			decoder.closeElement(rangeel);
 		}
 
@@ -110,14 +106,7 @@ public abstract class SymbolEntry {
 			return;
 		}
 		AddressSpace space = pcaddr.getAddressSpace();
-		long off;
-		if (space.isOverlaySpace()) {
-			space = space.getPhysicalSpace();
-			off = space.getAddress(pcaddr.getOffset()).getUnsignedOffset();
-		}
-		else {
-			off = pcaddr.getUnsignedOffset();
-		}
+		long off = pcaddr.getUnsignedOffset();
 		encoder.openElement(ELEM_RANGE);
 		encoder.writeSpace(ATTRIB_SPACE, space);
 		encoder.writeUnsignedInteger(ATTRIB_FIRST, off);

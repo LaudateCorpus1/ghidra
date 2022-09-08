@@ -22,7 +22,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 import ghidra.program.database.symbol.CodeSymbol;
-import ghidra.program.model.address.*;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.*;
@@ -36,19 +37,6 @@ import ghidra.util.exception.InvalidInputException;
  */
 
 public class JumpTable {
-
-	/** 
-	 * Translate address into preferred memory space (JumpTable.preferredSpace) 
-	 * @param addr is the given Address
-	 * @return preferred address or original addr
-	 */
-	private Address translateOverlayAddress(Address addr) {
-		if (addr != null && preferredSpace.isOverlaySpace()) {
-			OverlayAddressSpace overlaySpace = (OverlayAddressSpace) preferredSpace;
-			return overlaySpace.getOverlayAddress(addr);
-		}
-		return addr;
-	}
 
 	public class LoadTable {
 		Address addr;		// Starting address of table
@@ -79,11 +67,11 @@ public class JumpTable {
 			return num;
 		}
 
-		public void decode(Decoder decoder) throws PcodeXMLException {
+		public void decode(Decoder decoder) throws DecoderException {
 			int el = decoder.openElement(ELEM_LOADTABLE);
 			size = (int) decoder.readSignedInteger(ATTRIB_SIZE);
 			num = (int) decoder.readSignedInteger(ATTRIB_NUM);
-			addr = translateOverlayAddress(AddressXML.decode(decoder));
+			addr = AddressXML.decode(decoder);
 			decoder.closeElement(el);
 		}
 	}
@@ -160,9 +148,9 @@ public class JumpTable {
 	/**
 	 * Decode a JumpTable object from the stream.
 	 * @param decoder is the stream decoder
-	 * @throws PcodeXMLException for invalid encodings
+	 * @throws DecoderException for invalid encodings
 	 */
-	public void decode(Decoder decoder) throws PcodeXMLException {
+	public void decode(Decoder decoder) throws DecoderException {
 		int el = decoder.openElement(ELEM_JUMPTABLE);
 		if (decoder.peekElement() == 0) {		// Empty jumptable
 			decoder.closeElement(el);
@@ -172,7 +160,7 @@ public class JumpTable {
 		ArrayList<Integer> lTable = new ArrayList<>();
 		ArrayList<LoadTable> ldTable = new ArrayList<>();
 
-		Address switchAddr = translateOverlayAddress(AddressXML.decode(decoder));
+		Address switchAddr = AddressXML.decode(decoder);
 
 		for (;;) {
 			int subel = decoder.peekElement();
@@ -181,8 +169,7 @@ public class JumpTable {
 			}
 			if (subel == ELEM_DEST.id()) {
 				decoder.openElement();
-				Address caseAddr =
-					translateOverlayAddress(AddressXML.decodeFromAttributes(decoder));
+				Address caseAddr = AddressXML.decodeFromAttributes(decoder);
 				aTable.add(caseAddr);
 				decoder.rewindAttributes();
 				for (;;) {

@@ -221,9 +221,9 @@ Architecture::~Architecture(void)
 
 /// The Architecture maintains the set of prototype models that can
 /// be applied for this particular executable. Retrieve one by name.
-/// The model must exist or an exception is thrown.
+/// If the model doesn't exist, null is returned.
 /// \param nm is the name
-/// \return the matching model
+/// \return the matching model or null
 ProtoModel *Architecture::getModel(const string &nm) const
 
 {
@@ -231,7 +231,7 @@ ProtoModel *Architecture::getModel(const string &nm) const
 
   iter = protoModels.find(nm);
   if (iter==protoModels.end())
-    throw LowlevelError("Prototype model does not exist: "+nm);
+    return (ProtoModel *)0;
   return (*iter).second;
 }
 
@@ -313,10 +313,13 @@ int4 Architecture::getMinimumLanedRegisterSize(void) const
 /// The default model is used whenever an explicit model is not known
 /// or can't be determined.
 /// \param nm is the name of the model to set
-void Architecture::setDefaultModel(const string &nm)
+void Architecture::setDefaultModel(ProtoModel *model)
 
 {
-  defaultfp = getModel(nm);
+  if (defaultfp != (ProtoModel *)0)
+    defaultfp->setPrintInDecl(true);
+  model->setPrintInDecl(false);
+  defaultfp = model;
 }
 
 /// Throw out the syntax tree, (unlocked) symbols, comments, and other derived information
@@ -534,22 +537,25 @@ void Architecture::nameFunction(const Address &addr,string &name) const
   name = defname.str();
 }
 
-/// This process sets up a "register relative" space for this architecture
-/// If the name is "stack", this space takes on the role of an "official" stack space
-/// Should only be called once during initialization
+/// \brief Create a new address space associated with a pointer register
+///
+/// This process sets up a \e register \e relative"space for this architecture.
+/// If indicated, this space takes on the role of the \e formal stack space.
+/// Should only be called once during initialization.
 /// \param basespace is the address space underlying the stack
 /// \param nm is the name of the new space
 /// \param ptrdata is the register location acting as a pointer into the new space
 /// \param truncSize is the (possibly truncated) size of the register that fits the space
 /// \param isreversejustified is \b true if small variables are justified opposite of endianness
 /// \param stackGrowth is \b true if a stack implemented in this space grows in the negative direction
+/// \param isFormal is the indicator for the \b formal stack space
 void Architecture::addSpacebase(AddrSpace *basespace,const string &nm,const VarnodeData &ptrdata,
-				int4 truncSize,bool isreversejustified,bool stackGrowth)
+				int4 truncSize,bool isreversejustified,bool stackGrowth,bool isFormal)
 
 {
   int4 ind = numSpaces();
   
-  SpacebaseSpace *spc = new SpacebaseSpace(this,translate,nm,ind,truncSize,basespace,ptrdata.space->getDelay()+1);
+  SpacebaseSpace *spc = new SpacebaseSpace(this,translate,nm,ind,truncSize,basespace,ptrdata.space->getDelay()+1,isFormal);
   if (isreversejustified)
     setReverseJustified(spc);
   insertSpace(spc);
@@ -814,7 +820,7 @@ ProtoModel *Architecture::decodeProto(Decoder &decoder)
 
   res->decode(decoder);
   
-  ProtoModel *other = protoModels[res->getName()];
+  ProtoModel *other = getModel(res->getName());
   if (other != (ProtoModel *)0) {
     string errMsg = "Duplicate ProtoModel name: " + res->getName();
     delete res;
@@ -833,7 +839,7 @@ void Architecture::decodeProtoEval(Decoder &decoder)
 {
   uint4 elemId = decoder.openElement();
   string modelName = decoder.readString(ATTRIB_NAME);
-  ProtoModel *res = protoModels[ modelName ];
+  ProtoModel *res = getModel(modelName);
   if (res == (ProtoModel *)0)
     throw LowlevelError("Unknown prototype model name: "+modelName);
 
@@ -861,7 +867,8 @@ void Architecture::decodeDefaultProto(Decoder &decoder)
   while(decoder.peekElement() != 0) {
     if (defaultfp != (ProtoModel *)0)
       throw LowlevelError("More than one default prototype model");
-    defaultfp = decodeProto(decoder);
+    ProtoModel *model = decodeProto(decoder);
+    setDefaultModel(model);
   }
   decoder.closeElement(elemId);
 }
@@ -1047,7 +1054,7 @@ void Architecture::decodeStackPointer(Decoder &decoder)
     truncSize = basespace->getAddrSize();
   }
 
-  addSpacebase(basespace,"stack",point,truncSize,isreversejustify,stackGrowth); // Create the "official" stackpointer
+  addSpacebase(basespace,"stack",point,truncSize,isreversejustify,stackGrowth,true); // Create the "official" stackpointer
 }
 
 /// Manually alter the dead-code delay for a specific address space,
@@ -1114,7 +1121,7 @@ void Architecture::decodeSpacebase(Decoder &decoder)
   AddrSpace *basespace = decoder.readSpace(ATTRIB_SPACE);
   decoder.closeElement(elemId);
   const VarnodeData &point(translate->getRegister(registerName));
-  addSpacebase(basespace,nameString,point,point.size,false,false);
+  addSpacebase(basespace,nameString,point,point.size,false,false,false);
 }
 
 /// Configure memory based on a \<nohighptr> element. Mark specific address ranges
@@ -1187,6 +1194,20 @@ void Architecture::createModelAlias(const string &aliasName,const string &parent
   if (iter != protoModels.end())
     throw LowlevelError("Duplicate ProtoModel name: "+aliasName);
   protoModels[aliasName] = new ProtoModel(aliasName,*model);
+}
+
+/// A new UnknownProtoModel, which clones its behavior from the default model, is created and associated with the
+/// unrecognized name.  Subsequent queries of the name return this new model.
+/// \param modelName is the unrecognized name
+/// \return the new \e unknown prototype model associated with the name
+ProtoModel *Architecture::createUnknownModel(const string &modelName)
+
+{
+  UnknownProtoModel *model = new UnknownProtoModel(modelName,defaultfp);
+  protoModels[modelName] = model;
+  if (modelName == "unknown")		// "unknown" is a reserved/internal name
+    model->setPrintInDecl(false);	// don't print it in declarations
+  return model;
 }
 
 /// This looks for the \<processor_spec> tag and and sets configuration
@@ -1357,8 +1378,8 @@ void Architecture::parseCompilerConfig(DocumentStorage &store)
   addOtherSpace();
       
   if (defaultfp == (ProtoModel *)0) {
-    if (protoModels.size() == 1)
-      defaultfp = (*protoModels.begin()).second;
+    if (protoModels.size() > 0)
+      setDefaultModel((*protoModels.begin()).second);
     else
       throw LowlevelError("No default prototype specified");
   }

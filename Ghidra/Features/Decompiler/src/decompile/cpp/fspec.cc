@@ -926,6 +926,8 @@ void ParamListStandard::forceExclusionGroup(ParamActive *active)
   int4 inactiveCount = 0;
   for(int4 i=0;i<numTrials;++i) {
     ParamTrial &curtrial(active->getTrial(i));
+    if (curtrial.isDefinitelyNotUsed() || !curtrial.getEntry()->isExclusion())
+         continue;
     int4 grp = curtrial.getEntry()->getGroup();
     if (grp != curGroup) {
       if (inactiveCount > 1)
@@ -934,13 +936,12 @@ void ParamListStandard::forceExclusionGroup(ParamActive *active)
       groupStart = i;
       inactiveCount = 0;
     }
-    if (curtrial.isDefinitelyNotUsed() || !curtrial.getEntry()->isExclusion())
-      continue;
-    else if (!curtrial.isActive())
-      inactiveCount += 1;
-    else if (curtrial.isActive()) {
+    if (curtrial.isActive()) {
       int4 groupUpper = grp + curtrial.getEntry()->getGroupSize() - 1; // This entry covers some number of groups
       markGroupNoUse(active, groupUpper, groupStart, i);
+    }
+    else {
+      inactiveCount += 1;
     }
   }
   if (inactiveCount > 1)
@@ -1701,6 +1702,25 @@ bool ParamTrial::operator<(const ParamTrial &b) const
   return (size < b.size);
 }
 
+/// Sort by fixed position then by ParamTrial::operator<
+/// \param a trial
+/// \param b trial
+/// \return \b true if \b a should be ordered before \b b
+bool ParamTrial::fixedPositionCompare(const ParamTrial &a, const ParamTrial &b)
+
+{
+	if (a.fixedPosition == -1 && b.fixedPosition == -1){
+		return a < b;
+	}
+	if (a.fixedPosition == -1){
+		return false;
+	}
+	if (b.fixedPosition == -1){
+		return true;
+	}
+	return a.fixedPosition < b.fixedPosition;
+}
+
 /// \param recoversub selects whether a sub-function or the active function is being tested
 ParamActive::ParamActive(bool recoversub)
 
@@ -2085,6 +2105,7 @@ ProtoModel::ProtoModel(Architecture *g)
   stackgrowsnegative = true;	// Normal stack parameter ordering
   hasThis = false;
   isConstruct = false;
+  isPrinted = true;
   defaultLocalRange();
   defaultParamRange();
 }
@@ -2097,6 +2118,7 @@ ProtoModel::ProtoModel(const string &nm,const ProtoModel &op2)
 {
   glb = op2.glb;
   name = nm;
+  isPrinted = true;		// Don't inherit. Always print unless setPrintInDecl called explicitly
   extrapop = op2.extrapop;
   if (op2.input != (ParamList *)0)
     input = op2.input->clone();
@@ -2283,6 +2305,7 @@ void ProtoModel::decode(Decoder &decoder)
   extrapop = -300;
   hasThis = false;
   isConstruct = false;
+  isPrinted = true;
   effectlist.clear();
   injectUponEntry = -1;
   injectUponReturn = -1;
@@ -3527,7 +3550,6 @@ void FuncProto::setModel(ProtoModel *m)
     model = m;
     extrapop = ProtoModel::extrapop_unknown;
   }
-  flags &= ~((uint4)unknown_model);	// Model is not "unknown" (even if null pointer is passed in)
 }
 
 /// The full function prototype is (re)set from a model, names, and data-types
@@ -4355,7 +4377,6 @@ void FuncProto::decode(Decoder &decoder,Architecture *glb)
     throw LowlevelError("Prototype storage must be set before restoring FuncProto");
   ProtoModel *mod = (ProtoModel *)0;
   bool seenextrapop = false;
-  bool seenunknownmod = false;
   int4 readextrapop;
   flags = 0;
   injectid = -1;
@@ -4365,24 +4386,20 @@ void FuncProto::decode(Decoder &decoder,Architecture *glb)
     if (attribId == 0) break;
     if (attribId == ATTRIB_MODEL) {
       string modelname = decoder.readString();
-      if ((modelname == "default")||(modelname.size()==0))
-	mod = glb->defaultfp;	// Get default model
-      else if (modelname == "unknown") {
-	mod = glb->defaultfp;		// Use the default
-	seenunknownmod = true;
-      }
-      else
+      if (modelname.size()==0 || modelname == "default")
+	mod = glb->defaultfp;	// Use the default model
+      else {
 	mod = glb->getModel(modelname);
+	if (mod == (ProtoModel *)0)	// Model name is unrecognized
+	  mod = glb->createUnknownModel(modelname);	// Create model with placeholder behavior
+      }
     }
     else if (attribId == ATTRIB_EXTRAPOP) {
       seenextrapop = true;
-      string expopval = decoder.readString();
-      if (expopval == "unknown")
+      try {
+	readextrapop = decoder.readSignedInteger();
+      } catch(DecoderError &err) {
 	readextrapop = ProtoModel::extrapop_unknown;
-      else {
-	istringstream i1(expopval);
-	i1.unsetf(ios::dec | ios::hex | ios::oct);
-	i1 >> readextrapop;
       }
     }
     else if (attribId == ATTRIB_MODELLOCK) {
@@ -4422,8 +4439,6 @@ void FuncProto::decode(Decoder &decoder,Architecture *glb)
     setModel(mod);		// This sets extrapop to model default
   if (seenextrapop)		// If explicitly set
     extrapop = readextrapop;
-  if (seenunknownmod)
-    flags |= unknown_model;
 
   uint4 subId = decoder.peekElement();
   if (subId != 0) {
@@ -5325,6 +5340,12 @@ void FuncCallSpecs::buildInputFromTrials(Funcdata &data)
   vector<Varnode *> newparam;
 
   newparam.push_back(op->getIn(0)); // Preserve the fspec parameter
+
+  if (isDotdotdot() && isInputLocked()){
+      //if varargs, move the fixed args to the beginning of the list in order
+	  //preserve relative order of variable args
+	  activeinput.sortFixedPosition();
+  }
 
   for(int4 i=0;i<activeinput.getNumTrials();++i) {
     const ParamTrial &paramtrial( activeinput.getTrial(i) );
