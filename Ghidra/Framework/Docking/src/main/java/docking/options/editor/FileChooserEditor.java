@@ -16,7 +16,6 @@
 package docking.options.editor;
 
 import java.awt.Component;
-import java.awt.Font;
 import java.awt.event.MouseListener;
 import java.beans.PropertyEditorSupport;
 import java.io.File;
@@ -27,6 +26,7 @@ import javax.swing.event.DocumentListener;
 
 import org.apache.commons.lang3.StringUtils;
 
+import docking.widgets.button.BrowseButton;
 import docking.widgets.filechooser.GhidraFileChooser;
 
 /**
@@ -106,10 +106,7 @@ public class FileChooserEditor extends PropertyEditorSupport {
 			setLayout(bl);
 
 			textField.setText(currentFileValue != null ? currentFileValue.getAbsolutePath() : "");
-			browseButton = ButtonPanelFactory.createButton(ButtonPanelFactory.BROWSE_TYPE);
-			Font f = browseButton.getFont();
-			f = new Font(f.getName(), Font.BOLD, f.getSize());
-			browseButton.setFont(f);
+			browseButton = new BrowseButton();
 
 			add(textField);
 			add(Box.createHorizontalStrut(5));

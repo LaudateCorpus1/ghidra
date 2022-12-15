@@ -353,7 +353,7 @@ public abstract class PcodeEmit {
 		else if (opcode == PcodeOp.CBRANCH) {
 			int offsetType = inputs[0].getOffset().getType();
 			if (offsetType == ConstTpl.J_RELATIVE || offsetType == ConstTpl.J_START ||
-				offsetType == ConstTpl.J_NEXT) {
+				offsetType == ConstTpl.J_NEXT || offsetType == ConstTpl.J_NEXT2) {
 				return false;
 			}
 
@@ -664,6 +664,10 @@ public abstract class PcodeEmit {
 		AddressSpace spc = vn.getSpace().fixSpace(walker);
 		Address addr = spc.getTruncatedAddress(vn.getOffset().fix(walker), false);
 		// translate the address into the overlayspace if we have an overlayspace.
+		if (startAddress.getAddressSpace().isOverlaySpace()) {
+			OverlayAddressSpace overSpace = (OverlayAddressSpace) startAddress.getAddressSpace();
+			addr = overSpace.getOverlayAddress(addr);
+		}
 		ParserWalker oldwalker = walker;
 		long olduniqueoffset = uniqueoffset;
 		setUniqueOffset(addr);

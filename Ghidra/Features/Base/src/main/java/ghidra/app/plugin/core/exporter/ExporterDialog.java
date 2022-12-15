@@ -26,8 +26,8 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 
 import docking.DialogComponentProvider;
-import docking.options.editor.ButtonPanelFactory;
 import docking.widgets.OptionDialog;
+import docking.widgets.button.BrowseButton;
 import docking.widgets.checkbox.GCheckBox;
 import docking.widgets.combobox.GhidraComboBox;
 import docking.widgets.filechooser.GhidraFileChooser;
@@ -169,8 +169,8 @@ public class ExporterDialog extends DialogComponentProvider implements AddressFa
 			}
 		};
 		OptionsDialog optionsDialog = new OptionsDialog(options, validator, this);
-		optionsDialog.setHelpLocation(
-			new HelpLocation("ExporterPlugin", getAnchorForSelectedFormat()));
+		optionsDialog
+				.setHelpLocation(new HelpLocation("ExporterPlugin", getAnchorForSelectedFormat()));
 		tool.showDialog(optionsDialog);
 		if (!optionsDialog.wasCancelled()) {
 			options = optionsDialog.getOptions();
@@ -230,7 +230,7 @@ public class ExporterDialog extends DialogComponentProvider implements AddressFa
 
 		});
 
-		fileChooserButton = ButtonPanelFactory.createButton(ButtonPanelFactory.BROWSE_TYPE);
+		fileChooserButton = new BrowseButton();
 		fileChooserButton.addActionListener(e -> chooseDestinationFile());
 
 		JPanel panel = new JPanel(new BorderLayout());
@@ -297,9 +297,12 @@ public class ExporterDialog extends DialogComponentProvider implements AddressFa
 
 	private List<Exporter> getApplicableExporters() {
 		List<Exporter> list = new ArrayList<>(ClassSearcher.getInstances(Exporter.class));
-		Class<? extends DomainObject> domainObjectClass = domainFile.getDomainObjectClass();
-		list.removeIf(exporter -> !exporter.canExportDomainObject(domainObjectClass));
-		Collections.sort(list, (o1, o2) -> o1.toString().compareTo(o2.toString()));
+		Class<?> domainObjectClass = domainFile.getDomainObjectClass();
+		DomainObject domainObj = getDomainObject(TaskMonitor.DUMMY);
+		if (DomainObject.class.isAssignableFrom(domainObjectClass)) {
+			list.removeIf(exporter -> !exporter.canExportDomainObject(domainObj));
+			Collections.sort(list, (o1, o2) -> o1.toString().compareTo(o2.toString()));
+		}
 		return list;
 	}
 
@@ -422,8 +425,16 @@ public class ExporterDialog extends DialogComponentProvider implements AddressFa
 
 	private void doOpenFile(TaskMonitor monitor) {
 		try {
-			domainObject = domainFile.getImmutableDomainObject(this, DomainFile.DEFAULT_VERSION,
-				TaskMonitor.DUMMY);
+			if (domainFile.isLinkFile()) {
+				// Linked files are always subject to upgrade if needed and do not support
+				// getImmutableDomainObject
+				domainObject =
+					domainFile.getReadOnlyDomainObject(this, DomainFile.DEFAULT_VERSION, monitor);
+			}
+			else {
+				domainObject =
+					domainFile.getImmutableDomainObject(this, DomainFile.DEFAULT_VERSION, monitor);
+			}
 		}
 		catch (VersionException | CancelledException | IOException e) {
 			Msg.showError(this, getComponent(), "Error Opening File",

@@ -31,6 +31,8 @@ import ghidra.file.formats.android.dex.DexHeaderFactory;
 import ghidra.file.formats.android.dex.format.DexConstants;
 import ghidra.file.formats.android.dex.format.DexHeader;
 import ghidra.file.formats.android.multidex.MultiDexLinker;
+import ghidra.file.formats.android.versions.AndroidVersion;
+import ghidra.file.formats.android.versions.AndroidVersionManager;
 import ghidra.file.formats.android.xml.AndroidXmlFileSystem;
 import ghidra.file.formats.zip.ZipFileSystem;
 import ghidra.formats.gfilesystem.FileSystemService;
@@ -62,12 +64,12 @@ public class ApkLoader extends DexLoader {
 	}
 
 	@Override
-	protected List<Program> loadProgram(ByteProvider provider, String programName,
+	protected List<LoadedProgram> loadProgram(ByteProvider provider, String programName,
 			DomainFolder programFolder, LoadSpec loadSpec, List<Option> options, MessageLog log,
 			Object consumer, TaskMonitor monitor) throws CancelledException, IOException {
 
 		boolean success = false;
-		List<Program> programList = new ArrayList<>();
+		List<LoadedProgram> allLoadedPrograms = new ArrayList<>();
 		int dexIndex = 1;//DEX file numbering starts at 1
 		try (ZipFileSystem zipFS = openAPK(provider, monitor)) {
 			while (!monitor.isCancelled()) {
@@ -84,11 +86,11 @@ public class ApkLoader extends DexLoader {
 				try (ByteProvider dexProvider =
 					zipFS.getByteProvider(classesDexFile, monitor)) {
 					// defer to the super class (DexLoader) to actually load the DEX file
-					List<Program> program =
+					List<LoadedProgram> loadedPrograms =
 						super.loadProgram(dexProvider, classesDexFile.getName(), programFolder,
 							loadSpec, options, log, consumer, monitor);
 
-					programList.addAll(program);
+					allLoadedPrograms.addAll(loadedPrograms);
 				}
 				++dexIndex;
 			}
@@ -99,11 +101,11 @@ public class ApkLoader extends DexLoader {
 		}
 		finally {
 			if (!success) {
-				release(programList, consumer);
+				release(allLoadedPrograms, consumer);
 			}
 		}
-		link(programList, log, monitor);
-		return programList;
+		link(allLoadedPrograms.stream().map(e -> e.program()).toList(), log, monitor);
+		return allLoadedPrograms;
 	}
 
 	@Override
@@ -190,12 +192,12 @@ public class ApkLoader extends DexLoader {
 				SAXBuilder sax = XmlUtilities.createSecureSAXBuilder(false, false);
 				Document document = sax.build(xmlFileByteProvider.getInputStream(0));
 				Element rootElement = document.getRootElement();
-				Attribute attribute = rootElement.getAttribute("platformBuildVersionName");
-				String platformBuildVersionName = attribute.getValue();
+				AndroidVersion version = getAndroidVersion(rootElement);
 
 				List<QueryResult> queries =
 					QueryOpinionService.query(getName(), DexConstants.MACHINE,
-						platformBuildVersionName);
+						String.valueOf(version.getVersionLetter()));
+
 				for (QueryResult result : queries) {
 					loadSpecs.add(new LoadSpec(this, 0, result));
 				}
@@ -205,6 +207,17 @@ public class ApkLoader extends DexLoader {
 			//ignore
 		}
 		return loadSpecs;
+	}
+
+	private AndroidVersion getAndroidVersion(Element rootElement) {
+		Attribute codeAttribute =
+			rootElement.getAttribute(AndroidVersionManager.PLATFORM_BUILD_VERSION_CODE);
+		String platformBuildVersionCode = codeAttribute == null ? null : codeAttribute.getValue();
+		Attribute nameAttribute =
+			rootElement.getAttribute(AndroidVersionManager.PLATFORM_BUILD_VERSION_NAME);
+		String platformBuildVersionName = nameAttribute == null ? null : nameAttribute.getValue();
+		return AndroidVersionManager.getByPlatformBuildVersion(platformBuildVersionCode,
+			platformBuildVersionName);
 	}
 
 	/**

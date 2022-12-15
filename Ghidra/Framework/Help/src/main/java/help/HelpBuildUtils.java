@@ -18,12 +18,16 @@ package help;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
-import java.text.MessageFormat;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import generic.jar.ResourceFile;
+import generic.theme.GIcon;
+import generic.theme.Gui;
+import ghidra.framework.Application;
+import ghidra.util.HelpLocation;
 import help.validator.location.*;
 import resources.IconProvider;
 import resources.Icons;
@@ -32,24 +36,23 @@ public class HelpBuildUtils {
 
 	private static final String HELP_TOPICS_ROOT_PATH = "help/topics";
 
-	// Great. You've just summoned Cthulu.
 	private static final Pattern HREF_PATTERN =
 		Pattern.compile("\"(\\.\\./[^/.]+/[^/.]+\\.html*(#[^\"]+)*)\"", Pattern.CASE_INSENSITIVE);
 
-	private static final Pattern STYLE_SHEET_PATTERN = Pattern.compile(
-		"<link\\s+rel.+stylesheet.+href=\"*(.+(Frontpage.css))\"*.+>", Pattern.CASE_INSENSITIVE);
-
 	private static final Pattern STYLE_CLASS_PATTERN =
 		Pattern.compile("class\\s*=\\s*\"(\\w+)\"", Pattern.CASE_INSENSITIVE);
-
-	private static final String STYLE_SHEET_FORMAT_STRING =
-		"<link rel=\"stylesheet\" type=\"text/css\" href=\"{0}{1}{2}\">";
-	private static final String SHARED_DIRECTORY = "shared/";
 
 	public static boolean debug = true;
 
 	private HelpBuildUtils() {
 		// utils class; can't create
+	}
+
+	public static Path getSharedHelpDirectory() {
+		ResourceFile appRootDir = Application.getApplicationRootDirectory();
+		ResourceFile sharedHelpDir =
+			new ResourceFile(appRootDir, "Framework/Help/src/main/resources/help/shared/");
+		return Paths.get(sharedHelpDir.getAbsolutePath());
 	}
 
 	public static HelpModuleLocation toLocation(File file) {
@@ -73,9 +76,12 @@ public class HelpBuildUtils {
 	}
 
 	/**
-	 * Returns a file object that is the help topic directory for the given file.  
-	 * This method is useful for finding the help topic directory when the given 
-	 * file doesn't live directly under a help topic.
+	 * Returns a file object that is the help topic directory for the given file.
+	 *   
+	 * <p>This method is useful for finding the help topic directory when the given file doesn't 
+	 * live directly under a help topic.
+	 * @param file the file for which to find a topic
+	 * @return the path to the help topic directory
 	 */
 	public static Path getHelpTopicDir(Path file) {
 		Path helpTopics = file.getFileSystem().getPath("help", "topics");
@@ -89,6 +95,14 @@ public class HelpBuildUtils {
 		return null;
 	}
 
+	/**
+	 * Returns a path object using the given source file path as the source of the given relative 
+	 * path.  The returned path represents a local file on the file system.
+	 * 
+	 * @param srcFile the source file path
+	 * @param relativePath the relative path
+	 * @return a path or null if the resolved path is not a local file 
+	 */
 	public static Path getFile(Path srcFile, String relativePath) {
 		if (relativePath == null || relativePath.isEmpty()) {
 			return null;
@@ -104,6 +118,13 @@ public class HelpBuildUtils {
 
 		if (relativePath.contains("\\")) {
 			return null; // not sure why this is here
+		}
+
+		if (relativePath.startsWith(HelpLocation.HELP_SHARED)) {
+			// special syntax that tells the help system to look in the shared directory
+			String updatedRelativePath = relativePath.substring(HelpLocation.HELP_SHARED.length());
+			Path sharedDir = getSharedHelpDirectory();
+			return sharedDir.resolve(updatedRelativePath);
 		}
 
 		Path parent = srcFile.getParent();
@@ -155,15 +176,6 @@ public class HelpBuildUtils {
 			fileContents = newContents;
 		}
 
-		String styleSheetFixupContents = fixStyleSheetLinkInFile(helpFile, fileContents);
-		if (styleSheetFixupContents != null) {
-			// a fixup has taken place
-			newContents = styleSheetFixupContents;
-
-			// replace the input to future processing so we don't lose changes
-			fileContents = newContents;
-		}
-
 		String styleSheetClassFixupContents = fixStyleSheetClassNames(helpFile, fileContents);
 		if (styleSheetClassFixupContents != null) {
 			newContents = styleSheetClassFixupContents;
@@ -174,56 +186,6 @@ public class HelpBuildUtils {
 		}
 
 		writeFileContents(helpFile, newContents);
-	}
-
-	private static String fixStyleSheetLinkInFile(Path helpFile, String fileContents) {
-
-		int currentPosition = 0;
-		StringBuffer newContents = new StringBuffer();
-		Matcher matcher = STYLE_SHEET_PATTERN.matcher(fileContents);
-
-		boolean hasMatches = matcher.find();
-		if (!hasMatches) {
-			return null; // no work to do
-		}
-
-		// only care about the first hit, if there are multiple matches
-		// Groups:
-		// 0 - full match
-		// 1 - href text with relative notation "../.."
-		// 2 - href text without relative prefix
-
-		int matchStart = matcher.start();
-		String fullMatch = matcher.group(0);
-
-		String beforeMatchString = fileContents.substring(currentPosition, matchStart);
-		newContents.append(beforeMatchString);
-		currentPosition = matchStart + fullMatch.length();
-
-		String fullHREFText = matcher.group(1);
-		if (fullHREFText.indexOf(SHARED_DIRECTORY) != -1) {
-			return null; // already fixed; nothing to do
-		}
-
-		debug("Found stylesheet reference text: " + fullHREFText + " in file: " +
-			helpFile.getFileName());
-
-		// pull off the relative path structure
-		String filenameOnlyHREFText = matcher.group(2);
-		int filenameStart = fullHREFText.indexOf(filenameOnlyHREFText);
-		String reltativePrefix = fullHREFText.substring(0, filenameStart);
-
-		String updatedStyleSheetTag = MessageFormat.format(STYLE_SHEET_FORMAT_STRING,
-			reltativePrefix, SHARED_DIRECTORY, filenameOnlyHREFText);
-		debug("\tnew link tag: " + updatedStyleSheetTag);
-		newContents.append(updatedStyleSheetTag);
-
-		// grab the remaining content
-		if (currentPosition < fileContents.length()) {
-			newContents.append(fileContents.substring(currentPosition));
-		}
-
-		return newContents.toString();
 	}
 
 	private static String fixStyleSheetClassNames(Path helpFile, String fileContents) {
@@ -504,10 +466,7 @@ public class HelpBuildUtils {
 
 	private static URI resolve(Path sourceFile, String ref) throws URISyntaxException {
 		URI resolved;
-		if (ref.startsWith("help/topics")) {
-			resolved = new URI(ref);  // help system syntax
-		}
-		else if (ref.startsWith("help/")) {
+		if (ref.startsWith("help/")) {
 			resolved = new URI(ref);  // help system syntax
 		}
 		else {
@@ -540,7 +499,7 @@ public class HelpBuildUtils {
 	 * @param sourceFile the source file path of the image reference
 	 * @param ref the reference text
 	 * @return an absolute path; null if the URI is remote
-	 * @throws URISyntaxException 
+	 * @throws URISyntaxException if there is an exception creating a URL/URI for the image location
 	 */
 	public static ImageLocation locateImageReference(Path sourceFile, String ref)
 			throws URISyntaxException {
@@ -563,6 +522,19 @@ public class HelpBuildUtils {
 			}
 			return ImageLocation.createRuntimeLocation(sourceFile, ref, resolved, path);
 		}
+		if (Gui.hasIcon(ref)) {
+
+			// 
+			// Wrap the GIcon inside of an IconProvider, as that class can handle a null URL 
+			// returned from GIcon. (This can happen if the GIcon is based on a modified icon.)
+			//
+			GIcon gIcon = new GIcon(ref);
+			IconProvider iconProvider = new IconProvider(gIcon, gIcon.getUrl());
+			URL url = iconProvider.getOrCreateUrl();
+			URI resolved = url.toURI();
+			Path path = toPath(resolved);
+			return ImageLocation.createRuntimeLocation(sourceFile, ref, resolved, path);
+		}
 
 		URI resolved = resolve(sourceFile, ref);
 		if (isRemote(resolved)) {
@@ -574,13 +546,14 @@ public class HelpBuildUtils {
 	}
 
 	/** 
-	 * Turn an HTML HREF reference into an absolute path.  This will 
-	 * locate files based upon relative references, specialized help system references (i.e., 
-	 * help/topics/...),  and absolute URLs.
+	 * Turn an HTML HREF reference into an absolute path.  This will locate files based upon 
+	 * relative references, specialized help system references (i.e., help/topics/...),  and 
+	 * absolute URLs.
 	 * 
+	 * @param sourceFile the reference's source file
 	 * @param ref the reference text
 	 * @return an absolute path; null if the URI is remote
-	 * @throws URISyntaxException 
+	 * @throws URISyntaxException if there is an exception creating a URL/URI for the image location
 	 */
 	public static Path locateReference(Path sourceFile, String ref) throws URISyntaxException {
 

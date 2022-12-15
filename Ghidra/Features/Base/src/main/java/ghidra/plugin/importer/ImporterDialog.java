@@ -15,14 +15,13 @@
  */
 package ghidra.plugin.importer;
 
-import java.util.*;
-import java.util.List;
-import java.util.stream.Collectors;
-
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
+import java.util.*;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -32,12 +31,13 @@ import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import docking.DialogComponentProvider;
-import docking.options.editor.ButtonPanelFactory;
 import docking.widgets.EmptyBorderButton;
+import docking.widgets.button.BrowseButton;
 import docking.widgets.combobox.GhidraComboBox;
 import docking.widgets.dialogs.MultiLineMessageDialog;
 import docking.widgets.label.GLabel;
 import docking.widgets.list.GListCellRenderer;
+import generic.theme.GIcon;
 import ghidra.app.services.ProgramManager;
 import ghidra.app.util.*;
 import ghidra.app.util.bin.ByteProvider;
@@ -56,7 +56,6 @@ import ghidra.util.*;
 import ghidra.util.layout.PairLayout;
 import ghidra.util.layout.VerticalLayout;
 import ghidra.util.task.TaskBuilder;
-import resources.ResourceManager;
 
 /**
  * Dialog for importing a file into Ghidra as a program.
@@ -213,7 +212,7 @@ public class ImporterDialog extends DialogComponentProvider {
 		folderNameTextField = new JTextField();
 		folderNameTextField.setEditable(false);
 		folderNameTextField.setFocusable(false);
-		folderButton = ButtonPanelFactory.createButton(ButtonPanelFactory.BROWSE_TYPE);
+		folderButton = new BrowseButton();
 		folderButton.addActionListener(e -> chooseProjectFolder());
 
 		JPanel panel = new JPanel(new BorderLayout());
@@ -227,7 +226,7 @@ public class ImporterDialog extends DialogComponentProvider {
 		languageTextField.setEditable(false);
 		languageTextField.setFocusable(false);
 
-		languageButton = ButtonPanelFactory.createButton(ButtonPanelFactory.BROWSE_TYPE);
+		languageButton = new BrowseButton();
 		languageButton.addActionListener(e -> {
 			Object selectedItem = loaderComboBox.getSelectedItem();
 			if (selectedItem instanceof Loader) {
@@ -244,7 +243,7 @@ public class ImporterDialog extends DialogComponentProvider {
 		});
 
 		Font font = languageButton.getFont();
-		languageButton.setFont(new Font(font.getName(), Font.BOLD, font.getSize()));
+		languageButton.setFont(font.deriveFont(Font.BOLD));
 
 		JPanel panel = new JPanel(new BorderLayout());
 		panel.add(languageTextField, BorderLayout.CENTER);
@@ -278,8 +277,7 @@ public class ImporterDialog extends DialogComponentProvider {
 
 	private Component buildLoaderInfoButton() {
 		JPanel panel = new JPanel(new BorderLayout());
-		EmptyBorderButton helpButton =
-			new EmptyBorderButton(ResourceManager.loadImage("images/information.png"));
+		EmptyBorderButton helpButton = new EmptyBorderButton(new GIcon("icon.information"));
 		helpButton.setToolTipText("Show list of supported format/loaders");
 
 		helpButton.addActionListener(e -> showSupportedImportFormats());

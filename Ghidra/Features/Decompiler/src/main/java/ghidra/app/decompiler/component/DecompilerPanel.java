@@ -37,10 +37,13 @@ import docking.widgets.fieldpanel.field.FieldElement;
 import docking.widgets.fieldpanel.listener.*;
 import docking.widgets.fieldpanel.support.*;
 import docking.widgets.indexedscrollpane.IndexedScrollPane;
+import generic.theme.GColor;
 import ghidra.app.decompiler.*;
 import ghidra.app.decompiler.component.hover.DecompilerHoverService;
+import ghidra.app.decompiler.component.margin.*;
 import ghidra.app.plugin.core.decompile.DecompilerClipboardProvider;
 import ghidra.app.plugin.core.decompile.actions.FieldBasedSearchLocation;
+import ghidra.app.util.viewer.util.ScrollpaneAlignedHorizontalLayout;
 import ghidra.program.model.address.*;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
@@ -55,18 +58,25 @@ import ghidra.util.task.SwingUpdateManager;
  * Class to handle the display of a decompiled function
  */
 public class DecompilerPanel extends JPanel implements FieldMouseListener, FieldLocationListener,
-		FieldSelectionListener, ClangHighlightListener {
+		FieldSelectionListener, ClangHighlightListener, LayoutListener {
 
-	private final static Color NON_FUNCTION_BACKGROUND_COLOR_DEF = new Color(220, 220, 220);
+	private final static Color NON_FUNCTION_BACKGROUND_COLOR_DEF = new GColor("color.bg.undefined");
 
 	// Default color for specially highlighted tokens
-	private final static Color SPECIAL_COLOR_DEF = new Color(255, 100, 0, 128);
+	private final static Color SPECIAL_COLOR_DEF =
+		new GColor("color.bg.decompiler.highlights.special");
 
 	private final DecompilerController controller;
 	private final DecompileOptions options;
+	private LineNumberDecompilerMarginProvider lineNumbersMargin;
 
-	private DecompilerFieldPanel fieldPanel;
-	private ClangLayoutController layoutMgr;
+	private final DecompilerFieldPanel fieldPanel;
+	private ClangLayoutController layoutController;
+	private final IndexedScrollPane scroller;
+	private final JComponent taskMonitorComponent;
+
+	private final List<DecompilerMarginProvider> marginProviders = new ArrayList<>();
+	private final VerticalLayoutPixelIndexMap pixmap = new VerticalLayoutPixelIndexMap();
 
 	private HighlightFactory hlFactory;
 	private ClangHighlightController highlightController;
@@ -99,20 +109,22 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		this.controller = controller;
 		this.options = options;
 		this.clipboard = clipboard;
+		this.taskMonitorComponent = taskMonitorComponent;
 		FontMetrics metrics = getFontMetrics(options);
 		if (clipboard != null) {
 			clipboard.setFontMetrics(metrics);
 		}
 		hlFactory = new SearchHighlightFactory();
 
-		layoutMgr = new ClangLayoutController(options, this, metrics, hlFactory);
-		fieldPanel = new DecompilerFieldPanel(layoutMgr);
-		setBackground(options.getCodeViewerBackgroundColor());
+		layoutController = new ClangLayoutController(options, this, metrics, hlFactory);
+		fieldPanel = new DecompilerFieldPanel(layoutController);
+		setBackground(options.getBackgroundColor());
 
-		IndexedScrollPane scroller = new IndexedScrollPane(fieldPanel);
+		scroller = new IndexedScrollPane(fieldPanel);
 		fieldPanel.addFieldSelectionListener(this);
 		fieldPanel.addFieldMouseListener(this);
 		fieldPanel.addFieldLocationListener(this);
+		fieldPanel.addLayoutListener(this);
 
 		decompilerHoverProvider = new DecompilerHoverProvider();
 
@@ -127,14 +139,18 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 
 		setPreferredSize(new Dimension(600, 400));
 		setDecompileData(new EmptyDecompileData("No Function"));
+
+		if (options.isDisplayLineNumbers()) {
+			addMarginProvider(lineNumbersMargin = new LineNumberDecompilerMarginProvider());
+		}
 	}
 
 	public List<ClangLine> getLines() {
-		return layoutMgr.getLines();
+		return layoutController.getLines();
 	}
 
 	public List<Field> getFields() {
-		return Arrays.asList(layoutMgr.getFields());
+		return Arrays.asList(layoutController.getFields());
 	}
 
 	public FieldPanel getFieldPanel() {
@@ -251,12 +267,12 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 	}
 
 	public void addHighlights(Set<Varnode> varnodes, ColorProvider colorProvider) {
-		ClangTokenGroup root = layoutMgr.getRoot();
+		ClangTokenGroup root = layoutController.getRoot();
 		highlightController.addPrimaryHighlights(root, colorProvider);
 	}
 
 	public void addHighlights(Set<PcodeOp> ops, Color hlColor) {
-		ClangTokenGroup root = layoutMgr.getRoot();
+		ClangTokenGroup root = layoutController.getRoot();
 		highlightController.addPrimaryHighlights(root, ops, hlColor);
 	}
 
@@ -381,7 +397,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 	 * @param decompileData the new data
 	 */
 	void setDecompileData(DecompileData decompileData) {
-		if (layoutMgr == null) {
+		if (layoutController == null) {
 			// we've been disposed!
 			return;
 		}
@@ -390,14 +406,14 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		this.decompileData = decompileData;
 		Function function = decompileData.getFunction();
 		if (decompileData.hasDecompileResults()) {
-			layoutMgr.buildLayouts(function, decompileData.getCCodeMarkup(), null, true);
+			layoutController.buildLayouts(function, decompileData.getCCodeMarkup(), null, true);
 			if (decompileData.getDebugFile() != null) {
 				controller.setStatusMessage(
 					"Debug file generated: " + decompileData.getDebugFile().getAbsolutePath());
 			}
 		}
 		else {
-			layoutMgr.buildLayouts(null, null, decompileData.getErrorMessage(), true);
+			layoutController.buildLayouts(null, null, decompileData.getErrorMessage(), true);
 		}
 
 		setLocation(oldData, decompileData);
@@ -461,8 +477,8 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		}
 	}
 
-	public LayoutModel getLayoutModel() {
-		return layoutMgr;
+	public ClangLayoutController getLayoutController() {
+		return layoutController;
 	}
 
 	public boolean containsLocation(ProgramLocation location) {
@@ -506,7 +522,8 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			return;
 		}
 
-		List<ClangToken> tokens = DecompilerUtils.getTokensFromView(layoutMgr.getFields(), address);
+		List<ClangToken> tokens =
+			DecompilerUtils.getTokensFromView(layoutController.getFields(), address);
 		goToBeginningOfLine(tokens);
 	}
 
@@ -521,7 +538,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			return false;
 		}
 
-		List<ClangLine> lines = layoutMgr.getLines();
+		List<ClangLine> lines = layoutController.getLines();
 		ClangLine signatureLine = getFunctionSignatureLine(lines);
 		if (signatureLine == null) {
 			return false; // can happen when there is no function decompiled
@@ -556,7 +573,8 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			return;
 		}
 
-		int firstLineNumber = DecompilerUtils.findIndexOfFirstField(tokens, layoutMgr.getFields());
+		int firstLineNumber =
+			DecompilerUtils.findIndexOfFirstField(tokens, layoutController.getFields());
 		if (firstLineNumber != -1) {
 			fieldPanel.goTo(BigInteger.valueOf(firstLineNumber), 0, 0, 0, false);
 		}
@@ -615,7 +633,8 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			fieldSelection = new FieldSelection();
 		}
 		else {
-			List<ClangToken> tokens = DecompilerUtils.getTokens(layoutMgr.getRoot(), selection);
+			List<ClangToken> tokens =
+				DecompilerUtils.getTokens(layoutController.getRoot(), selection);
 			fieldSelection = DecompilerUtils.getFieldSelection(tokens);
 		}
 		fieldPanel.setSelection(fieldSelection);
@@ -638,7 +657,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 
 	public void dispose() {
 		setDecompileData(new EmptyDecompileData("Disposed"));
-		layoutMgr = null;
+		layoutController = null;
 		decompilerHoverProvider.dispose();
 		highlighCursorUpdater.dispose();
 		highlightController.dispose();
@@ -757,7 +776,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		ClangNode node = token.Parent();
 		if (node instanceof ClangStatement) {
 			// check for a goto label
-			ClangTokenGroup root = layoutMgr.getRoot();
+			ClangTokenGroup root = layoutController.getRoot();
 			ClangLabelToken destination = DecompilerUtils.getGoToTargetToken(root, token);
 			if (destination != null) {
 				goToToken(destination);
@@ -895,13 +914,21 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		}
 		if (trigger != EventTrigger.API_CALL) {
 			Program program = decompileData.getProgram();
-			Field[] lines = layoutMgr.getFields();
+			Field[] lines = layoutController.getFields();
 			List<ClangToken> tokenList = DecompilerUtils.getTokensInSelection(selection, lines);
 			AddressSpace functionSpace = decompileData.getFunctionSpace();
 			AddressSet addrset =
 				DecompilerUtils.findClosestAddressSet(program, functionSpace, tokenList);
 			ProgramSelection programSelection = new ProgramSelection(addrset);
 			controller.selectionChanged(programSelection);
+		}
+	}
+
+	@Override
+	public void layoutsChanged(List<AnchoredLayout> layouts) {
+		pixmap.layoutsChanged(layouts);
+		for (DecompilerMarginProvider element : marginProviders) {
+			element.setProgram(getProgram(), layoutController, pixmap);
 		}
 	}
 
@@ -915,7 +942,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 		}
 		Address address = DecompilerUtils.getClosestAddress(getProgram(), token);
 		if (address == null) {
-			address = DecompilerUtils.findAddressBefore(layoutMgr.getFields(), token);
+			address = DecompilerUtils.findAddressBefore(layoutController.getFields(), token);
 		}
 		if (address == null) {
 			address = decompileData.getFunction().getEntryPoint();
@@ -932,12 +959,12 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 
 	public SearchLocation searchText(String text, FieldLocation startLocation,
 			boolean forwardDirection) {
-		return layoutMgr.findNextTokenForSearch(text, startLocation, forwardDirection);
+		return layoutController.findNextTokenForSearch(text, startLocation, forwardDirection);
 	}
 
 	public SearchLocation searchTextRegex(String text, FieldLocation startLocation,
 			boolean forwardDirection) {
-		return layoutMgr.findNextTokenForSearchRegex(text, startLocation, forwardDirection);
+		return layoutController.findNextTokenForSearchRegex(text, startLocation, forwardDirection);
 	}
 
 	public void setSearchResults(SearchLocation searchLocation) {
@@ -1035,7 +1062,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			return null;
 		}
 
-		Field[] lines = layoutMgr.getFields();
+		Field[] lines = layoutController.getFields();
 		List<ClangToken> tokens = DecompilerUtils.getTokensInSelection(selection, lines);
 
 		long count = tokens.stream().filter(t -> !t.getText().trim().isEmpty()).count();
@@ -1052,6 +1079,19 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 			return null;
 		}
 		return ((ClangTextField) field).getToken(cursorPosition);
+	}
+
+	/**
+	 * Get the line number for the given y position, relative to the scroll panel
+	 * 
+	 * <p>
+	 * If the y position is below all the lines, the last line is returned.
+	 * 
+	 * @param y the y position
+	 * @return the line number, or 0 if not applicable
+	 */
+	public int getLineNumber(int y) {
+		return pixmap.getIndex(y).intValue() + 1;
 	}
 
 	public DecompileOptions getOptions() {
@@ -1082,7 +1122,7 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 
 	public List<ClangToken> findTokensByName(String name) {
 		List<ClangToken> tokens = new ArrayList<>();
-		doFindTokensByName(tokens, layoutMgr.getRoot(), name);
+		doFindTokensByName(tokens, layoutController.getRoot(), name);
 		return tokens;
 	}
 
@@ -1117,20 +1157,63 @@ public class DecompilerPanel extends JPanel implements FieldMouseListener, Field
 	}
 
 	public void selectAll(EventTrigger trigger) {
-		BigInteger numIndexes = layoutMgr.getNumIndexes();
+		BigInteger numIndexes = layoutController.getNumIndexes();
 		FieldSelection selection = new FieldSelection();
 		selection.addRange(BigInteger.ZERO, numIndexes);
 		fieldPanel.setSelection(selection, trigger);
 	}
 
 	public void optionsChanged(DecompileOptions decompilerOptions) {
-		setBackground(decompilerOptions.getCodeViewerBackgroundColor());
+		setBackground(decompilerOptions.getBackgroundColor());
 		currentVariableHighlightColor = options.getCurrentVariableHighlightColor();
 		middleMouseHighlightColor = decompilerOptions.getMiddleMouseHighlightColor();
 		middleMouseHighlightButton = decompilerOptions.getMiddleMouseHighlightButton();
 		searchHighlightColor = decompilerOptions.getSearchHighlightColor();
 
 		highlightController.setHighlightColor(currentVariableHighlightColor);
+
+		if (options.isDisplayLineNumbers()) {
+			if (lineNumbersMargin == null) {
+				addMarginProvider(lineNumbersMargin = new LineNumberDecompilerMarginProvider());
+			}
+		}
+		else {
+			if (lineNumbersMargin != null) {
+				removeMarginProvider(lineNumbersMargin);
+				lineNumbersMargin = null;
+			}
+		}
+
+		for (DecompilerMarginProvider element : marginProviders) {
+			element.setOptions(options);
+		}
+	}
+
+	public void addMarginProvider(DecompilerMarginProvider provider) {
+		marginProviders.add(0, provider);
+		provider.setOptions(options);
+		provider.setProgram(getProgram(), layoutController, pixmap);
+		buildPanels();
+	}
+
+	public void removeMarginProvider(DecompilerMarginProvider provider) {
+		marginProviders.remove(provider);
+		buildPanels();
+	}
+
+	private void buildPanels() {
+		removeAll();
+		add(buildLeftComponent(), BorderLayout.WEST);
+		add(scroller, BorderLayout.CENTER);
+		add(taskMonitorComponent, BorderLayout.SOUTH);
+	}
+
+	private JComponent buildLeftComponent() {
+		JPanel leftPanel = new JPanel(new ScrollpaneAlignedHorizontalLayout(scroller));
+		for (DecompilerMarginProvider marginProvider : marginProviders) {
+			leftPanel.add(marginProvider.getComponent());
+		}
+		return leftPanel;
 	}
 
 //==================================================================================================
